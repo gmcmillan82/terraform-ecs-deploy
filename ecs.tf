@@ -10,19 +10,19 @@ resource "aws_ecs_task_definition" "ecs_task" {
 
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  execution_role_arn       = data.aws_iam_role.ecs_task_execution.arn
+  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
 
   container_definitions = jsonencode([
     {
       name      = "demo-app"
-      image     = "${var.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com/demo-app:production" # GHA will create a :production tag on merge to master
+      image     = "${data.aws_caller_identity.current.id}.dkr.ecr.${var.aws_region}.amazonaws.com/demo-app:production" # GHA will create a :production tag on merge to master
       cpu       = 256
       memory    = 512
       essential = true
       portMappings = [
         {
-          containerPort = 5000
-          hostPort      = 5000
+          containerPort = var.container_port
+          hostPort      = var.container_port
           protocol      = "tcp"
         }
       ]
@@ -34,26 +34,26 @@ resource "aws_lb" "nlb" {
   name               = "demo-nlb"
   internal           = false
   load_balancer_type = "network"
-  subnets            = data.aws_subnets.default.ids
-}
-
-resource "aws_lb_target_group" "nlb_tg" {
-  name        = "demo-app-tg"
-  port        = 5000
-  protocol    = "TCP"
-  vpc_id      = data.aws_vpc.default.id
-  target_type = "ip"
+  subnets            = data.aws_subnets.public.ids
 }
 
 resource "aws_lb_listener" "nlb_listener" {
   load_balancer_arn = aws_lb.nlb.arn
-  port              = 80
+  port              = var.lb_port
   protocol          = "TCP"
 
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.nlb_tg.arn
   }
+}
+
+resource "aws_lb_target_group" "nlb_tg" {
+  name        = "demo-app-tg"
+  port        = var.container_port
+  protocol    = "TCP"
+  vpc_id      = data.aws_vpc.default.id
+  target_type = "ip"
 }
 
 resource "aws_ecs_service" "ecs_service" {
@@ -66,11 +66,11 @@ resource "aws_ecs_service" "ecs_service" {
   load_balancer {
     target_group_arn = aws_lb_target_group.nlb_tg.arn
     container_name   = "demo-app"
-    container_port   = 5000
+    container_port   = var.container_port
   }
 
   network_configuration {
-    subnets          = data.aws_subnets.default.ids
+    subnets          = data.aws_subnets.private.ids
     security_groups  = [aws_security_group.ecs_sg.id]
     assign_public_ip = true
   }
@@ -81,8 +81,9 @@ resource "aws_security_group" "ecs_sg" {
   vpc_id = data.aws_vpc.default.id
 
   ingress {
-    from_port   = 80
-    to_port     = 80
+    from_port = var.container_port
+    to_port   = var.container_port
+
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -94,5 +95,3 @@ resource "aws_security_group" "ecs_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 }
-
-
